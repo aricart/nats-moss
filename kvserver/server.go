@@ -25,6 +25,7 @@ type KvOpts struct {
 	collection moss.Collection
 	gnatsd     *server.Server
 	nc         *nats.Conn
+	storeDone  chan string
 }
 
 func DefaultKvOpts() *KvOpts {
@@ -38,14 +39,26 @@ func DefaultKvOpts() *KvOpts {
 	return &kvopts
 }
 
+func (s *KvOpts) GetKvOpts() *KvOpts {
+	v := DefaultKvOpts()
+	v.Embed = s.Embed
+	v.Host = s.Host
+	v.Port = s.Port
+	v.DataDir = s.DataDir
+	v.Prefix = s.Prefix
+
+	return v
+}
+
 func (s *KvOpts) isEmbedded() bool {
 	return s.Embed
 }
 
 func (s *KvOpts) Start() {
+	s.storeDone = make(chan string, 1)
 	s.handleSignals()
-	s.maybeStartServer()
 	s.startDB()
+	s.maybeStartServer()
 	s.startClient()
 }
 
@@ -68,8 +81,32 @@ func (s *KvOpts) Stop() {
 		fmt.Println("Stopping embedded gnatsd")
 		s.gnatsd.Shutdown()
 	}
+
+	// wait for all writes to happen
+	for {
+		stats, er := s.collection.Stats()
+		if er == nil && stats.CurDirtyOps <= 0 {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
 	fmt.Println("Stopping store")
-	s.store.Close()
+	err := s.collection.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	err = s.store.Close()
+	if err != nil {
+		panic(err)
+	}
+	// wait for the store to finish
+	signal := <-s.storeDone
+	fmt.Printf("got store event %s\n", signal)
+	close(s.storeDone)
+	fmt.Printf("stopped: %v\n", s.store.IsAborted())
+
 }
 
 func (s *KvOpts) maybeStartServer() {
@@ -95,10 +132,45 @@ func (s *KvOpts) maybeStartServer() {
 	}
 }
 
+func (s *KvOpts) storeEventHandler(event moss.Event) {
+	if event.Kind == moss.EventKindClose {
+		s.storeDone <- "done"
+	}
+}
+
+func eventToString(e moss.Event) string {
+	switch e.Kind {
+	case moss.EventKindCloseStart:
+		return "EventKindCloseStart"
+	case moss.EventKindClose:
+		return "EventKindClose"
+	case moss.EventKindMergerProgress:
+		return "EventKindMergerProgress"
+	case moss.EventKindPersisterProgress:
+		return "EventKindPersisterProgress"
+	case moss.EventKindBatchExecuteStart:
+		return "EventKindBatchExecuteStart"
+	case moss.EventKindBatchExecute:
+		return "EventKindBatchExecute"
+	default:
+		return "Unknown"
+	}
+}
+
 func (s *KvOpts) startDB() {
 	var err error
-	s.store, s.collection, err = moss.OpenStoreCollection(s.DataDir, moss.StoreOptions{}, moss.StorePersistOptions{})
-	if err != nil {
+
+	opts := moss.CollectionOptions{
+		OnEvent: s.storeEventHandler,
+		OnError: func(err error) {
+			panic(err)
+		},
+	}
+	s.store, s.collection, err = moss.OpenStoreCollection(s.DataDir, moss.StoreOptions{
+		CollectionOptions: opts,
+		CompactionSync:    true,
+	}, moss.StorePersistOptions{})
+	if err != nil || s.store == nil || s.collection == nil {
 		panic(fmt.Sprintf("error opening store collection: %v", err))
 	}
 }
@@ -128,50 +200,88 @@ func (s *KvOpts) startClient() {
 	}
 }
 
+func (s *KvOpts) put(key, value []byte) error {
+	// put
+	batch, err := s.collection.NewBatch(0, 0)
+	if err != nil {
+		return err
+	}
+	batch.Set(key, value)
+	err = s.collection.ExecuteBatch(batch, moss.WriteOptions{})
+	if err != nil {
+		return err
+	}
+	err = batch.Close()
+	if err != nil {
+		return err
+	}
+	//fmt.Printf("[W] %s=%s\n", string(key), string(value))
+	return nil
+}
+
+func (s *KvOpts) delete(key []byte) error {
+	batch, err := s.collection.NewBatch(0, 0)
+	if err != nil {
+		return err
+	}
+	batch.Set(key, []byte(""))
+	err = s.collection.ExecuteBatch(batch, moss.WriteOptions{})
+	if err != nil {
+		return err
+	}
+	err = batch.Close()
+	if err != nil {
+		return err
+	}
+	//fmt.Printf("[D] %s\n", string(key))
+	return nil
+}
+
+func (s *KvOpts) get(key []byte) ([]byte, error) {
+	ss, err := s.collection.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	data, err := ss.Get(key, moss.ReadOptions{})
+	if err != nil {
+		return nil, err
+	}
+	err = ss.Close()
+	if err != nil {
+		return nil, err
+	}
+	//fmt.Printf("[R] %s=%s\n", string(key), string(data))
+	return data, nil
+}
+
 func (s *KvOpts) handler(msg *nats.Msg) {
+	// don't deal with _INBOX messages
 	if strings.HasPrefix(msg.Subject, "_INBOX.") {
 		return
 	}
+
 	key := []byte(msg.Subject)
 	if s.subject != "" {
 		key = key[len(s.Prefix):]
 	}
 
+	var err error
+	var op = ""
 	if len(msg.Data) > 0 {
-		// put
-		batch, err := s.collection.NewBatch(0, 0)
-		if err != nil {
-			panic(fmt.Sprintf("error creating batch: %v", err))
-		}
-		defer batch.Close()
-		batch.Set(key, msg.Data)
-		s.collection.ExecuteBatch(batch, moss.WriteOptions{})
-		fmt.Printf("[W] %s=%s\n", string(key), string(msg.Data))
+		op = "[P]"
+		err = s.put(key, msg.Data)
 	} else {
 		if msg.Reply == "" {
-			// delete
-			batch, err := s.collection.NewBatch(0, 0)
-			if err != nil {
-				panic(fmt.Sprintf("error creating batch: %v", err))
-			}
-			defer batch.Close()
-			batch.Set(key, []byte(""))
-			s.collection.ExecuteBatch(batch, moss.WriteOptions{})
-			fmt.Printf("[D] %s\n", string(key))
-
+			op = "[D]"
+			err = s.delete(key)
 		} else {
-			ss, err := s.collection.Snapshot()
-			if err != nil {
-				panic(fmt.Sprintf("error creating snapshot: %v", err))
-			}
-			defer ss.Close()
-			data, err := ss.Get(key, moss.ReadOptions{})
-			if err != nil {
-				panic(fmt.Sprintf("error getting value: %v", err))
-			}
+			var data []byte
+			op = "[G]"
+			data, err = s.get(key)
 			s.nc.Publish(msg.Reply, data)
-			fmt.Printf("[R] %s=%s\n", string(key), string(data))
-
 		}
+	}
+	if err != nil {
+		fmt.Printf("error %s: %v", op, err)
 	}
 }
