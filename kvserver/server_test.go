@@ -110,17 +110,17 @@ func TestValuesPresistRestart(t *testing.T) {
 
 	v := get(t, nc, "a")
 	if v != "aaa" {
-		t.Fatalf("returned key %s doesn't match expected 'aaa'")
+		t.Fatalf("returned key %s doesn't match expected 'aaa'", v)
 	}
 
 	v = get(t, nc, "b")
 	if v != "bbb" {
-		t.Fatalf("returned key %s doesn't match expected 'aaa'")
+		t.Fatalf("returned key %s doesn't match expected 'bbb'", v)
 	}
 
 	v = get(t, nc, "ab")
 	if v != "abab" {
-		t.Fatalf("returned key %s doesn't match expected 'aaa'")
+		t.Fatalf("returned key %s doesn't match expected 'abab'", v)
 	}
 
 	kvs.Stop()
