@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"github.com/aricart/nats-moss/kvserver"
+	"github.com/aricart/nks/kvserver"
 	"runtime"
 )
 
