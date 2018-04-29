@@ -4,6 +4,8 @@ import (
 	"github.com/couchbase/moss"
 	"fmt"
 	"time"
+	"expvar"
+	"io/ioutil"
 )
 
 type Kvs struct {
@@ -13,10 +15,92 @@ type Kvs struct {
 	currentBatch    moss.Batch
 	currentSnapshot moss.Snapshot
 	dataDir         string
+
+	Metrics
+}
+
+type Metrics struct {
+	put Metric
+	get Metric
+	del Metric
+}
+
+func (m *Metrics) Dump() {
+	fmt.Println("KVS Store")
+	fmt.Printf("GET %s\n", m.get.Dump())
+	fmt.Printf("PUT %s\n", m.put.Dump())
+	fmt.Printf("DEL %s\n", m.del.Dump())
+}
+
+func (m *Metric) reset(name string) bool {
+	didReset := false
+	names := []string{"TimeNanos", "Requests", "KeyBytes", "ValueBytes"}
+	for _, n := range names {
+		varName := fmt.Sprintf("%s%s", name, n)
+		v := expvar.Get(varName)
+		if v != nil {
+			i, ok := v.(*expvar.Int)
+			if ok {
+				i.Set(0)
+
+				// rebind them to the new struct
+				switch n {
+				case "TimeNanos":
+					m.nanos = i
+				case "Requests":
+					m.requests = i
+				case "KeyBytes":
+					m.keyBytes = i
+				case "ValueBytes":
+					m.valueBytes = i
+				}
+				didReset = true
+			}
+		}
+	}
+	return didReset
+}
+
+type Metric struct {
+	nanos      *expvar.Int
+	requests   *expvar.Int
+	keyBytes   *expvar.Int
+	valueBytes *expvar.Int
+}
+
+func (m *Metric) Dump() string {
+	if m.requests.Value() == 0 {
+		return "0"
+	}
+	d := time.Duration(m.nanos.Value())
+	rate := float64(m.requests.Value()) / d.Seconds()
+	return fmt.Sprintf("%d / %s [%.1f req/sec]", m.requests.Value(), d.String(), rate)
+}
+
+func (m *Metric) init(name string) {
+	if ! m.reset(name) {
+		m.nanos = expvar.NewInt(fmt.Sprintf("%sTimeNanos", name))
+		m.requests = expvar.NewInt(fmt.Sprintf("%sRequests", name))
+		m.keyBytes = expvar.NewInt(fmt.Sprintf("%sKeyBytes", name))
+		m.valueBytes = expvar.NewInt(fmt.Sprintf("%sValueBytes", name))
+	}
 }
 
 func NewKvs(dataDir string) *Kvs {
-	return &Kvs{dataDir: dataDir,}
+	if dataDir == "" {
+		var err error
+		dataDir, err = ioutil.TempDir("/tmp", "nks")
+		if err != nil {
+			panic(err)
+		}
+	}
+	kvs := &Kvs{dataDir: dataDir,}
+
+	kvs.get.init("get")
+	kvs.put.init("put")
+	kvs.del.init("del")
+
+	return kvs
 }
 
 func (k *Kvs) storeEventHandler(event moss.Event) {
@@ -43,6 +127,9 @@ func (k *Kvs) Start() {
 	if err != nil || k.store == nil || k.collection == nil {
 		panic(fmt.Sprintf("error opening store collection: %v", err))
 	}
+}
+
+func (k *Kvs) DumpMetrics() {
 }
 
 func (k *Kvs) Stop() {
@@ -73,21 +160,47 @@ func (k *Kvs) Stop() {
 	<-k.storeDone
 	close(k.storeDone)
 	fmt.Println("stopped.")
+
+	k.Dump()
 }
 
 func (k *Kvs) Put(key, value []byte) error {
+	now := time.Now()
+	k.put.requests.Add(1)
+	k.put.valueBytes.Add(int64(len(value)))
+	k.put.keyBytes.Add(int64(len(key)))
+
 	k.invalidateSnapshot()
-	return k.getCurrentBatch().Set(key, value)
+
+	err := k.getCurrentBatch().Set(key, value)
+
+	k.put.nanos.Add(time.Since(now).Nanoseconds())
+
+	return err
 }
 
 func (k *Kvs) Delete(key []byte) error {
+	now := time.Now()
+	k.del.requests.Add(1)
+	k.del.keyBytes.Add(int64(len(key)))
+
 	k.invalidateSnapshot()
-	return k.getCurrentBatch().Del(key)
+	err := k.getCurrentBatch().Del(key)
+
+	k.del.nanos.Add(time.Since(now).Nanoseconds())
+
+	return err
 }
 
 func (k *Kvs) Get(key []byte) ([]byte, error) {
+	now := time.Now()
+	k.get.requests.Add(1)
+	k.put.keyBytes.Add(int64(len(key)))
+
 	k.invalidateBatch()
-	return k.getCurrentSnapshot().Get(key, moss.ReadOptions{})
+	data, err := k.getCurrentSnapshot().Get(key, moss.ReadOptions{})
+	k.get.nanos.Add(time.Since(now).Nanoseconds())
+	return data, err
 }
 
 func (k *Kvs) getCurrentBatch() moss.Batch {

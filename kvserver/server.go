@@ -19,6 +19,7 @@ type KvServerOptions struct {
 	Embed   bool
 	Host    string
 	Port    int
+	MonPort int
 	Prefix  string
 }
 
@@ -27,7 +28,8 @@ func DefaultKvServerOptions() *KvServerOptions {
 	kvopts.Embed = true
 	kvopts.Host = "localhost"
 	kvopts.Port = -1
-	kvopts.DataDir = "/tmp"
+	kvopts.DataDir = ""
+	kvopts.MonPort = 6619
 	kvopts.Prefix = DefaultPrefix
 
 	return &kvopts
@@ -39,6 +41,8 @@ type KvServer struct {
 	gnatsd  *server.Server
 	nc      *nats.Conn
 	kvs     *Kvs
+
+	Metrics
 }
 
 func NewKvServer(options *KvServerOptions) *KvServer {
@@ -50,12 +54,12 @@ func NewKvServer(options *KvServerOptions) *KvServer {
 	return &v
 }
 
-func (s *KvServerOptions) GetOptions() *KvServerOptions {
+func (s *KvServer) GetOptions() *KvServerOptions {
 	v := DefaultKvServerOptions()
 	v.Embed = s.Embed
 	v.Host = s.Host
 	v.Port = s.Port
-	v.DataDir = s.DataDir
+	v.DataDir = s.kvs.dataDir
 	v.Prefix = s.Prefix
 
 	return v
