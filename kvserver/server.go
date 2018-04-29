@@ -42,7 +42,7 @@ type KvServer struct {
 	nc      *nats.Conn
 	kvs     *Kvs
 
-	Metrics
+	Metric
 }
 
 func NewKvServer(options *KvServerOptions) *KvServer {
@@ -70,6 +70,7 @@ func (s *KvServer) isEmbedded() bool {
 }
 
 func (s *KvServer) Start() {
+	s.Metric.init("Server")
 	s.handleSignals()
 	s.kvs = NewKvs(s.DataDir)
 	s.kvs.Start()
@@ -100,8 +101,10 @@ func (s *KvServer) Stop() {
 		fmt.Println("Stopping embedded gnatsd")
 		s.gnatsd.Shutdown()
 	}
-
 	s.kvs.Stop()
+
+	fmt.Println("Server")
+	fmt.Println(s.Metric.Dump())
 }
 
 func (s *KvServer) maybeStartServer() {
@@ -161,24 +164,28 @@ func (s *KvServer) handler(msg *nats.Msg) {
 	if strings.HasPrefix(msg.Subject, "_INBOX.") {
 		return
 	}
+	start := time.Now()
+	s.Metric.requests.Add(1)
 
 	key := []byte(msg.Subject)
 	if s.subject != "" {
 		key = key[len(s.Prefix):]
 	}
 
+	s.Metric.keyBytes.Add(int64(len(key)))
+
+	dataLen := len(msg.Data)
+	s.Metric.valueBytes.Add(int64(dataLen))
+
 	var err error
 	var op = ""
-	if len(msg.Data) > 0 {
-		op = "[P]"
+	if dataLen > 0 {
 		err = s.kvs.Put(key, msg.Data)
 	} else {
 		if msg.Reply == "" {
-			op = "[D]"
 			err = s.kvs.Delete(key)
 		} else {
 			var data []byte
-			op = "[G]"
 			data, err = s.kvs.Get(key)
 			if err == nil {
 				s.nc.Publish(msg.Reply, data)
@@ -188,4 +195,6 @@ func (s *KvServer) handler(msg *nats.Msg) {
 	if err != nil {
 		fmt.Printf("error %s: %v", op, err)
 	}
+
+	s.Metric.nanos.Add(time.Since(start).Nanoseconds())
 }

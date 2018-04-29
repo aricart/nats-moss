@@ -171,7 +171,6 @@ func TestDoubleUpdate(t *testing.T) {
 
 func TestPerf(t *testing.T) {
 	var err error
-
 	kvs := NewKvServer(nil)
 	kvs.Start()
 
@@ -197,8 +196,8 @@ func TestPerf(t *testing.T) {
 	start = time.Now()
 	get(t, nc, "a")
 	fmt.Printf("Time to store %d keys %s\n", count, time.Since(start).String())
-	start = time.Now()
 	nc.Flush()
+	start = time.Now()
 
 	c := make(chan string)
 	// wait until we can get back the last item
@@ -223,6 +222,9 @@ func TestPerf(t *testing.T) {
 	work := count / maxClients
 	fmt.Printf("Work per client: %d\n", work)
 
+	m := Metric{}
+	m.init("Client")
+
 	for j := 0; j < maxClients; j++ {
 		wg.Add(1)
 		go func(id int) {
@@ -237,7 +239,10 @@ func TestPerf(t *testing.T) {
 			fmt.Printf("client: %d start: %d end: %d\n", id, start, end)
 
 			for i := start; i < end; i++ {
+				start := time.Now()
+				m.requests.Add(1)
 				vv := get(t, cc, buf[i])
+				m.nanos.Add(time.Since(start).Nanoseconds())
 				if vv != buf[i] {
 					fmt.Printf("%s = %s\n", buf[i], vv)
 					fmt.Printf("client %d didn't get correct value for %d\n", id, i)
@@ -257,5 +262,9 @@ func TestPerf(t *testing.T) {
 	nc.Close()
 
 	length := time.Since(start)
-	fmt.Println(length.String())
+	fmt.Println("Client")
+	fmt.Println(m.Dump())
+	fmt.Printf("%d / %s [%.1f req/sec]\n", m.requests.Value(), length.String(), float64(m.requests.Value())/length.Seconds())
+
+
 }
