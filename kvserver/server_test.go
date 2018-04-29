@@ -209,6 +209,13 @@ func TestPerf(t *testing.T) {
 		}
 	}
 	nc.Flush()
+	fmt.Printf("Adding %d keys %s\n", count, time.Since(start).String())
+
+	start = time.Now()
+	get(t, nc, "a")
+	fmt.Printf("Time to store %d keys %s\n", count, time.Since(start).String())
+	start = time.Now()
+	nc.Flush()
 
 	c := make(chan string)
 	// wait until we can get back the last item
@@ -227,7 +234,7 @@ func TestPerf(t *testing.T) {
 
 	<-c
 
-	maxClients := 5
+	maxClients := 8
 	wg := sync.WaitGroup{}
 
 	work := count / maxClients
