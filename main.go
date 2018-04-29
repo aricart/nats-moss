@@ -6,18 +6,20 @@ import (
 	"runtime"
 )
 
-var srv *kvserver.KvOpts
+var srv *kvserver.KvServerOptions
 
 func main() {
-	s := &kvserver.KvOpts{}
+	opts := &kvserver.KvServerOptions{}
 
-	flag.BoolVar(&s.Embed, "e", false, "Embed gnatsd")
-	flag.StringVar(&s.Host, "h", "localhost", "server host")
-	flag.IntVar(&s.Port, "p", 4222, "NATS Server Port")
-	flag.StringVar(&s.DataDir, "d", "/tmp", "datadir")
-	flag.StringVar(&s.Prefix, "-prefix", kvserver.DefaultPrefix, "keystore prefix")
+	flag.BoolVar(&opts.Embed, "e", false, "Embed gnatsd")
+	flag.StringVar(&opts.Host, "h", "localhost", "server host")
+	flag.IntVar(&opts.Port, "p", 4222, "NATS Server Port")
+	flag.StringVar(&opts.DataDir, "d", "/tmp", "datadir")
+	flag.StringVar(&opts.Prefix, "-prefix", kvserver.DefaultPrefix, "keystore prefix")
 	flag.Parse()
 
-	s.Start()
+	server := kvserver.NewKvServer(opts)
+	server.Start()
+
 	runtime.Goexit()
 }

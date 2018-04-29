@@ -3,7 +3,6 @@ package kvserver
 import (
 	"fmt"
 	"github.com/nats-io/go-nats"
-	"io/ioutil"
 	"sync"
 	"testing"
 	"time"
@@ -31,19 +30,21 @@ func clear(t *testing.T, nc *nats.Conn, key string) {
 	}
 }
 
+func natsURL(kvs *KvServer) string {
+	return fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port)
+}
+
 func TestStartStop(t *testing.T) {
-	kvs := DefaultKvOpts()
-	kvs.Port = -1
+	kvs := NewKvServer(nil)
 	kvs.Start()
 
-
-	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err := nats.Connect(natsURL(kvs))
 	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
+		t.Fatalf("failed to connect to: %v", err)
 	}
-	msg, err := nc.Request("a", []byte(""), time.Second)
+	msg, err := nc.Request("a", []byte(""), time.Second*60)
 	if err != nil {
-		t.Fatalf("failed to connect to kvserver: %v", err)
+		t.Fatalf("failed to make request: %v", err)
 	}
 	if msg == nil {
 		t.Fatal("Reponse was nil")
@@ -53,7 +54,7 @@ func TestStartStop(t *testing.T) {
 	kvs.Stop()
 	time.Sleep(time.Second * 1)
 
-	nc, err = nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err = nats.Connect(natsURL(kvs))
 	if err == nil {
 		t.Fatalf("failed to stop: %v", err)
 	}
@@ -62,15 +63,10 @@ func TestStartStop(t *testing.T) {
 func TestRWC(t *testing.T) {
 	var err error
 
-	kvs := DefaultKvOpts()
-	kvs.Port = -1
-	kvs.DataDir, err = ioutil.TempDir("/tmp", "kvs")
-	if err != nil {
-		t.Fatal(err)
-	}
+	kvs := NewKvServer(nil)
 	kvs.Start()
 
-	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err := nats.Connect(natsURL(kvs))
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -95,15 +91,10 @@ func TestRWC(t *testing.T) {
 func TestValuesPresistRestart(t *testing.T) {
 	var err error
 
-	kvs := DefaultKvOpts()
-	kvs.Port = -1
-	kvs.DataDir, err = ioutil.TempDir("/tmp", "kvs")
-	if err != nil {
-		t.Fatal(err)
-	}
+	kvs := NewKvServer(nil)
 	kvs.Start()
 
-	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err := nats.Connect(natsURL(kvs))
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -130,10 +121,10 @@ func TestValuesPresistRestart(t *testing.T) {
 	kvs.Stop()
 	nc.Close()
 
-	kvs = kvs.GetKvOpts()
+	kvs = NewKvServer(kvs.GetOptions())
 	kvs.Start()
 
-	nc, err = nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err = nats.Connect(natsURL(kvs))
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -160,15 +151,10 @@ func TestValuesPresistRestart(t *testing.T) {
 func TestDoubleUpdate(t *testing.T) {
 	var err error
 
-	kvs := DefaultKvOpts()
-	kvs.Port = -1
-	kvs.DataDir, err = ioutil.TempDir("/tmp", "clobber")
-	if err != nil {
-		t.Fatal(err)
-	}
+	kvs := NewKvServer(nil)
 	kvs.Start()
 
-	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err := nats.Connect(natsURL(kvs))
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -186,16 +172,10 @@ func TestDoubleUpdate(t *testing.T) {
 func TestPerf(t *testing.T) {
 	var err error
 
-	kvs := DefaultKvOpts()
-	kvs.Port = -1
-
-	kvs.DataDir, err = ioutil.TempDir("/tmp", "perf")
-	if err != nil {
-		t.Fatal(err)
-	}
+	kvs := NewKvServer(nil)
 	kvs.Start()
 
-	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	nc, err := nats.Connect(natsURL(kvs))
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
