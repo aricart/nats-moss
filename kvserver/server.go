@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"net"
 )
 
 const DefaultPrefix = "keystore"
@@ -63,6 +64,10 @@ func (s *KvOpts) Start() {
 	s.startDB()
 	s.maybeStartServer()
 	s.startClient()
+}
+
+func (s *KvOpts) GetEmbeddedPort() int {
+	return s.gnatsd.Addr().(*net.TCPAddr).Port
 }
 
 func (s *KvOpts) handleSignals() {
@@ -133,6 +138,10 @@ func (s *KvOpts) maybeStartServer() {
 
 		if s.isEmbedded() && !s.gnatsd.ReadyForConnections(5*time.Second) {
 			panic("unable to start embedded server")
+		}
+
+		if s.Port == -1 {
+			s.Port = s.GetEmbeddedPort()
 		}
 	}
 }

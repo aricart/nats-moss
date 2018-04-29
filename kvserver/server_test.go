@@ -33,7 +33,9 @@ func clear(t *testing.T, nc *nats.Conn, key string) {
 
 func TestStartStop(t *testing.T) {
 	kvs := DefaultKvOpts()
+	kvs.Port = -1
 	kvs.Start()
+
 
 	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
 	if err != nil {
@@ -61,6 +63,7 @@ func TestRWC(t *testing.T) {
 	var err error
 
 	kvs := DefaultKvOpts()
+	kvs.Port = -1
 	kvs.DataDir, err = ioutil.TempDir("/tmp", "kvs")
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +96,7 @@ func TestValuesPresistRestart(t *testing.T) {
 	var err error
 
 	kvs := DefaultKvOpts()
+	kvs.Port = -1
 	kvs.DataDir, err = ioutil.TempDir("/tmp", "kvs")
 	if err != nil {
 		t.Fatal(err)
@@ -157,8 +161,7 @@ func TestDoubleUpdate(t *testing.T) {
 	var err error
 
 	kvs := DefaultKvOpts()
-	kvs.Embed = true
-	kvs.Prefix = ""
+	kvs.Port = -1
 	kvs.DataDir, err = ioutil.TempDir("/tmp", "clobber")
 	if err != nil {
 		t.Fatal(err)
@@ -184,8 +187,8 @@ func TestPerf(t *testing.T) {
 	var err error
 
 	kvs := DefaultKvOpts()
-	kvs.Embed = true
-	kvs.Prefix = ""
+	kvs.Port = -1
+
 	kvs.DataDir, err = ioutil.TempDir("/tmp", "perf")
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +237,7 @@ func TestPerf(t *testing.T) {
 
 	<-c
 
-	maxClients := 8
+	maxClients := 10
 	wg := sync.WaitGroup{}
 
 	work := count / maxClients

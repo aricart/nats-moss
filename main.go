@@ -13,7 +13,7 @@ func main() {
 
 	flag.BoolVar(&s.Embed, "e", false, "Embed gnatsd")
 	flag.StringVar(&s.Host, "h", "localhost", "server host")
-	flag.IntVar(&s.Port, "p", 4222, "Embedded server port")
+	flag.IntVar(&s.Port, "p", 4222, "NATS Server Port")
 	flag.StringVar(&s.DataDir, "d", "/tmp", "datadir")
 	flag.StringVar(&s.Prefix, "-prefix", kvserver.DefaultPrefix, "keystore prefix")
 	flag.Parse()
