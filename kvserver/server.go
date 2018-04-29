@@ -26,6 +26,9 @@ type KvOpts struct {
 	gnatsd     *server.Server
 	nc         *nats.Conn
 	storeDone  chan string
+
+	currentBatch    moss.Batch
+	currentSnapshot moss.Snapshot
 }
 
 func DefaultKvOpts() *KvOpts {
@@ -82,6 +85,10 @@ func (s *KvOpts) Stop() {
 		s.gnatsd.Shutdown()
 	}
 
+	// close and save
+	s.invalidateBatch()
+	s.invalidateSnapshot()
+
 	// wait for all writes to happen
 	for {
 		stats, er := s.collection.Stats()
@@ -102,11 +109,9 @@ func (s *KvOpts) Stop() {
 		panic(err)
 	}
 	// wait for the store to finish
-	signal := <-s.storeDone
-	fmt.Printf("got store event %s\n", signal)
+	<-s.storeDone
 	close(s.storeDone)
-	fmt.Printf("stopped: %v\n", s.store.IsAborted())
-
+	fmt.Println("stopped.")
 }
 
 func (s *KvOpts) maybeStartServer() {
@@ -135,25 +140,6 @@ func (s *KvOpts) maybeStartServer() {
 func (s *KvOpts) storeEventHandler(event moss.Event) {
 	if event.Kind == moss.EventKindClose {
 		s.storeDone <- "done"
-	}
-}
-
-func eventToString(e moss.Event) string {
-	switch e.Kind {
-	case moss.EventKindCloseStart:
-		return "EventKindCloseStart"
-	case moss.EventKindClose:
-		return "EventKindClose"
-	case moss.EventKindMergerProgress:
-		return "EventKindMergerProgress"
-	case moss.EventKindPersisterProgress:
-		return "EventKindPersisterProgress"
-	case moss.EventKindBatchExecuteStart:
-		return "EventKindBatchExecuteStart"
-	case moss.EventKindBatchExecute:
-		return "EventKindBatchExecute"
-	default:
-		return "Unknown"
 	}
 }
 
@@ -201,57 +187,64 @@ func (s *KvOpts) startClient() {
 }
 
 func (s *KvOpts) put(key, value []byte) error {
-	// put
-	batch, err := s.collection.NewBatch(0, 0)
-	if err != nil {
-		return err
-	}
-	batch.Set(key, value)
-	err = s.collection.ExecuteBatch(batch, moss.WriteOptions{})
-	if err != nil {
-		return err
-	}
-	err = batch.Close()
-	if err != nil {
-		return err
-	}
-	//fmt.Printf("[W] %s=%s\n", string(key), string(value))
-	return nil
+	return s.getCurrentBatch().Set(key, value)
 }
 
 func (s *KvOpts) delete(key []byte) error {
-	batch, err := s.collection.NewBatch(0, 0)
-	if err != nil {
-		return err
-	}
-	batch.Set(key, []byte(""))
-	err = s.collection.ExecuteBatch(batch, moss.WriteOptions{})
-	if err != nil {
-		return err
-	}
-	err = batch.Close()
-	if err != nil {
-		return err
-	}
-	//fmt.Printf("[D] %s\n", string(key))
-	return nil
+	return s.getCurrentBatch().Del(key)
 }
 
-func (s *KvOpts) get(key []byte) ([]byte, error) {
-	ss, err := s.collection.Snapshot()
+func (s *KvOpts) get(key []byte) []byte {
+	data, err := s.getCurrentSnapshot().Get(key, moss.ReadOptions{})
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-	data, err := ss.Get(key, moss.ReadOptions{})
-	if err != nil {
-		return nil, err
+	return data
+}
+
+func (s *KvOpts) getCurrentBatch() moss.Batch {
+	var err error
+	if s.currentBatch == nil {
+		s.currentBatch, err = s.collection.NewBatch(0, 0)
+		if err != nil {
+			panic(err)
+		}
 	}
-	err = ss.Close()
-	if err != nil {
-		return nil, err
+	return s.currentBatch
+}
+
+func (s *KvOpts) invalidateBatch() {
+	var err error
+	if s.currentBatch != nil {
+		err = s.collection.ExecuteBatch(s.currentBatch, moss.WriteOptions{})
+		if err != nil {
+			panic(err)
+		}
+		s.currentBatch.Close()
+		s.currentBatch = nil
 	}
-	//fmt.Printf("[R] %s=%s\n", string(key), string(data))
-	return data, nil
+}
+
+func (s *KvOpts) getCurrentSnapshot() moss.Snapshot {
+	var err error
+	if s.currentSnapshot == nil {
+		s.currentSnapshot, err = s.collection.Snapshot()
+		if err != nil {
+			panic(err)
+		}
+	}
+	return s.currentSnapshot
+}
+
+func (s *KvOpts) invalidateSnapshot() {
+	var err error
+	if s.currentSnapshot != nil {
+		err = s.currentSnapshot.Close()
+		if err != nil {
+			panic(err)
+		}
+		s.currentSnapshot = nil
+	}
 }
 
 func (s *KvOpts) handler(msg *nats.Msg) {
@@ -268,16 +261,20 @@ func (s *KvOpts) handler(msg *nats.Msg) {
 	var err error
 	var op = ""
 	if len(msg.Data) > 0 {
+		s.invalidateSnapshot()
 		op = "[P]"
 		err = s.put(key, msg.Data)
+		s.invalidateSnapshot()
 	} else {
 		if msg.Reply == "" {
+			s.invalidateSnapshot()
 			op = "[D]"
 			err = s.delete(key)
 		} else {
+			s.invalidateBatch()
 			var data []byte
 			op = "[G]"
-			data, err = s.get(key)
+			data = s.get(key)
 			s.nc.Publish(msg.Reply, data)
 		}
 	}

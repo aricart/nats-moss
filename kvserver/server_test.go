@@ -153,6 +153,33 @@ func TestValuesPresistRestart(t *testing.T) {
 	kvs.Stop()
 }
 
+func TestDoubleUpdate(t *testing.T) {
+	var err error
+
+	kvs := DefaultKvOpts()
+	kvs.Embed = true
+	kvs.Prefix = ""
+	kvs.DataDir, err = ioutil.TempDir("/tmp", "clobber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kvs.Start()
+
+	nc, err := nats.Connect(fmt.Sprintf("nats://%s:%d", kvs.Host, kvs.Port))
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+
+	put(t, nc, "a", "a")
+	put(t, nc, "a", "b")
+	v := get(t, nc, "a")
+	if v != "b" {
+		t.Fatal("value didn't match")
+	}
+	nc.Close()
+	kvs.Stop()
+}
+
 func TestPerf(t *testing.T) {
 	var err error
 
@@ -170,7 +197,7 @@ func TestPerf(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	count := 10000
+	count := 1000000
 	buf := make([]string, count)
 	start := time.Now()
 	for i := 0; i < count; i++ {
