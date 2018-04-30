@@ -40,8 +40,10 @@ type KvServer struct {
 	subject string
 	gnatsd  *server.Server
 	nc      *nats.Conn
+	out     *nats.Conn
 	kvs     *Kvs
-
+	pending chan *nats.Msg
+	done 	chan string
 	Metric
 }
 
@@ -73,6 +75,8 @@ func (s *KvServer) Start() {
 	s.Metric.init("Server")
 	s.handleSignals()
 	s.kvs = NewKvs(s.DataDir)
+	s.pending = make(chan *nats.Msg, 20000)
+	s.done = make(chan string)
 	s.kvs.Start()
 	s.maybeStartServer()
 	s.startClient()
@@ -101,6 +105,18 @@ func (s *KvServer) Stop() {
 		fmt.Println("Stopping embedded gnatsd")
 		s.gnatsd.Shutdown()
 	}
+	// stop processing requests
+	s.nc.Close()
+	s.nc = nil
+
+	s.out.Close()
+	s.out = nil
+
+	// save whatever we have
+	s.pending <- nil
+	// wait for accepted entries to be stored
+	<- s.done
+
 	s.kvs.Stop()
 
 	fmt.Println("Server")
@@ -135,8 +151,16 @@ func (s *KvServer) maybeStartServer() {
 }
 
 func (s *KvServer) startClient() {
+	// start processing
+	go s.processPending()
+
 	var err error
 	url := fmt.Sprintf("nats://%s:%d", s.Host, s.Port)
+	s.out, err = nats.Connect(url)
+	if err != nil {
+		panic(fmt.Sprintf("unable to connect to server [%s]: %v", url, err))
+	}
+
 	s.nc, err = nats.Connect(url)
 	if err != nil {
 		panic(fmt.Sprintf("unable to connect to server [%s]: %v", url, err))
@@ -159,42 +183,54 @@ func (s *KvServer) startClient() {
 	}
 }
 
-func (s *KvServer) handler(msg *nats.Msg) {
-	// don't deal with _INBOX messages
-	if strings.HasPrefix(msg.Subject, "_INBOX.") {
-		return
-	}
-	start := time.Now()
-	s.Metric.requests.Add(1)
+func (s *KvServer) processPending() {
+	for {
+		msg := <-s.pending
+		if msg == nil {
+			fmt.Println("Number of requests processed by process: ", s.Metric.requests.Value())
+			close(s.pending)
+			s.done <-"done"
+			return
+		}
+		// don't deal with _INBOX messages
+		if strings.HasPrefix(msg.Subject, "_INBOX.") {
+			continue
+		}
+		start := time.Now()
+		s.Metric.requests.Add(1)
 
-	key := []byte(msg.Subject)
-	if s.subject != "" {
-		key = key[len(s.Prefix):]
-	}
+		key := []byte(msg.Subject)
+		if s.subject != "" {
+			key = key[len(s.Prefix):]
+		}
 
-	s.Metric.keyBytes.Add(int64(len(key)))
+		s.Metric.keyBytes.Add(int64(len(key)))
+		dataLen := len(msg.Data)
+		s.Metric.valueBytes.Add(int64(dataLen))
 
-	dataLen := len(msg.Data)
-	s.Metric.valueBytes.Add(int64(dataLen))
-
-	var err error
-	var op = ""
-	if dataLen > 0 {
-		err = s.kvs.Put(key, msg.Data)
-	} else {
-		if msg.Reply == "" {
-			err = s.kvs.Delete(key)
+		var err error
+		var op= ""
+		if dataLen > 0 {
+			err = s.kvs.Put(key, msg.Data)
 		} else {
-			var data []byte
-			data, err = s.kvs.Get(key)
-			if err == nil {
-				s.nc.Publish(msg.Reply, data)
+			if msg.Reply == "" {
+				err = s.kvs.Delete(key)
+			} else {
+				var data []byte
+				data, err = s.kvs.Get(key)
+				if err == nil && s.nc != nil {
+					s.out.Publish(msg.Reply, data)
+				}
 			}
 		}
-	}
-	if err != nil {
-		fmt.Printf("error %s: %v", op, err)
-	}
+		if err != nil {
+			fmt.Printf("error %s: %v", op, err)
+		}
 
-	s.Metric.nanos.Add(time.Since(start).Nanoseconds())
+		s.Metric.nanos.Add(time.Since(start).Nanoseconds())
+	}
+}
+
+func (s *KvServer) handler(msg *nats.Msg) {
+	s.pending <- msg
 }
