@@ -33,6 +33,26 @@ Currently NKS provides the following options:
         Embedded server port (default 4222)
 ```
 
+### Starting the server
+```
+malaga:~/go/src/github.com/aricart/nks [1631:2]% nks -d /tmp/foo -p 4222 -e
+Monitoring http://localhost:6619/debug/vars
+Starting gnatsd
+Connected [nats://localhost:4222]
+Listening for keystore requests on >
+```
+
+
+### Sample session
+```
+malaga:~ [1632]% nats-pub hello world
+Published [hello] : 'world'
+malaga:~ [1633]% nats-req hello ""
+Published [hello] : ''
+Received [_INBOX.HY407EBKIAvPCDfNwLPmKk] : 'world'
+malaga:~ [1634]%
+```
+
 ## To Do
 
 - Support TLS
