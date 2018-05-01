@@ -6,21 +6,23 @@ import (
 	"github.com/nats-io/go-nats"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 	"net"
+	"strings"
+	"hash/crc32"
 )
 
 const DefaultPrefix = "keystore"
 
 type KvServerOptions struct {
-	DataDir string
-	Embed   bool
-	Host    string
-	Port    int
-	MonPort int
-	Prefix  string
+	DataDir     string
+	Embed       bool
+	Host        string
+	Port        int
+	MonPort     int
+	Prefix      string
+	PusherCount int
 }
 
 func DefaultKvServerOptions() *KvServerOptions {
@@ -31,6 +33,7 @@ func DefaultKvServerOptions() *KvServerOptions {
 	kvopts.DataDir = ""
 	kvopts.MonPort = 6619
 	kvopts.Prefix = DefaultPrefix
+	kvopts.PusherCount = 1
 
 	return &kvopts
 }
@@ -40,10 +43,10 @@ type KvServer struct {
 	subject string
 	gnatsd  *server.Server
 	nc      *nats.Conn
-	out     *nats.Conn
+	out     []*nats.Conn
 	kvs     *Kvs
 	pending chan *nats.Msg
-	done 	chan string
+	done    chan string
 	Metric
 }
 
@@ -72,10 +75,11 @@ func (s *KvServer) isEmbedded() bool {
 }
 
 func (s *KvServer) Start() {
+	s.out = make([]*nats.Conn, s.PusherCount)
 	s.Metric.init("Server")
 	s.handleSignals()
 	s.kvs = NewKvs(s.DataDir)
-	s.pending = make(chan *nats.Msg, 20000)
+	s.pending = make(chan *nats.Msg, 1000)
 	s.done = make(chan string)
 	s.kvs.Start()
 	s.maybeStartServer()
@@ -109,8 +113,11 @@ func (s *KvServer) Stop() {
 	s.nc.Close()
 	s.nc = nil
 
-	s.out.Close()
-	s.out = nil
+	for i := 0; i < s.PusherCount; i++ {
+		s.out[i].Close()
+		s.out[i] = nil
+	}
+
 
 	// save whatever we have
 	s.pending <- nil
@@ -156,9 +163,11 @@ func (s *KvServer) startClient() {
 
 	var err error
 	url := fmt.Sprintf("nats://%s:%d", s.Host, s.Port)
-	s.out, err = nats.Connect(url)
-	if err != nil {
-		panic(fmt.Sprintf("unable to connect to server [%s]: %v", url, err))
+	for i := 0; i < s.PusherCount; i++ {
+		s.out[i], err = nats.Connect(url)
+		if err != nil {
+			panic(fmt.Sprintf("unable to connect to server [%s]: %v", url, err))
+		}
 	}
 
 	s.nc, err = nats.Connect(url)
@@ -183,6 +192,11 @@ func (s *KvServer) startClient() {
 	}
 }
 
+func hash(s []byte) int {
+	h := crc32.ChecksumIEEE(s)
+	return int(h)
+}
+
 func (s *KvServer) processPending() {
 	for {
 		msg := <-s.pending
@@ -192,10 +206,7 @@ func (s *KvServer) processPending() {
 			s.done <-"done"
 			return
 		}
-		// don't deal with _INBOX messages
-		if strings.HasPrefix(msg.Subject, "_INBOX.") {
-			continue
-		}
+
 		start := time.Now()
 		s.Metric.requests.Add(1)
 
@@ -219,7 +230,11 @@ func (s *KvServer) processPending() {
 				var data []byte
 				data, err = s.kvs.Get(key)
 				if err == nil && s.nc != nil {
-					s.out.Publish(msg.Reply, data)
+					bucket := 0
+					if s.PusherCount > 1 {
+						bucket = hash(key) % s.PusherCount
+					}
+					s.out[bucket].Publish(msg.Reply, data)
 				}
 			}
 		}
@@ -232,5 +247,9 @@ func (s *KvServer) processPending() {
 }
 
 func (s *KvServer) handler(msg *nats.Msg) {
+	// ignore _INBOX messages
+	if strings.HasPrefix(msg.Subject, "_INBOX.") {
+		return
+	}
 	s.pending <- msg
 }

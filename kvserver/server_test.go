@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-func get(t *testing.T, nc *nats.Conn, key string) string {
+func get(t *testing.T, nc *nats.Conn, key string, prefix string) string {
+	if prefix != "" {
+		key = fmt.Sprintf("%s.%s", prefix, key)
+	}
 	msg, err := nc.Request(key, []byte(""), time.Second)
 	if err != nil {
 		t.Fatalf("failed to request value from kvserver: %v", err)
@@ -16,14 +19,20 @@ func get(t *testing.T, nc *nats.Conn, key string) string {
 	return string(msg.Data)
 }
 
-func put(t *testing.T, nc *nats.Conn, key string, value string) {
+func put(t *testing.T, nc *nats.Conn, key string, value string, prefix string) {
+	if prefix != "" {
+		key = fmt.Sprintf("%s.%s", prefix, key)
+	}
 	err := nc.Publish(key, []byte(value))
 	if err != nil {
 		t.Fatalf("failed to put value from kvserver: %v", err)
 	}
 }
 
-func clear(t *testing.T, nc *nats.Conn, key string) {
+func clear(t *testing.T, nc *nats.Conn, key string, prefix string) {
+	if prefix != "" {
+		key = fmt.Sprintf("%s.%s", prefix, key)
+	}
 	err := nc.Publish(key, []byte(""))
 	if err != nil {
 		t.Fatalf("failed to clear value from kvserver: %v", err)
@@ -71,15 +80,45 @@ func TestRWC(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	put(t, nc, "a", "aaa")
-	v := get(t, nc, "a")
+	put(t, nc, "a", "aaa", kvs.Prefix)
+	v := get(t, nc, "a", kvs.Prefix)
 
 	if v != "aaa" {
 		t.Fatalf("unexpected value from kvserver: %v", err)
 	}
 
-	clear(t, nc, "a")
-	v = get(t, nc, "a")
+	clear(t, nc, "a", kvs.Prefix)
+	v = get(t, nc, "a", kvs.Prefix)
+	if v != "" {
+		t.Fatalf("unexpected value from kvserver: %v", err)
+	}
+
+	nc.Close()
+	kvs.Stop()
+}
+
+func TestRWCWithPrefixes(t *testing.T) {
+	var err error
+
+	opts := DefaultKvServerOptions()
+	opts.Prefix = "nks"
+	kvs := NewKvServer(opts)
+	kvs.Start()
+
+	nc, err := nats.Connect(natsURL(kvs))
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+
+	put(t, nc, "a", "aaa", kvs.Prefix)
+	v := get(t, nc, "a", kvs.Prefix)
+
+	if v != "aaa" {
+		t.Fatalf("unexpected value from kvserver: %v", err)
+	}
+
+	clear(t, nc, "a", kvs.Prefix)
+	v = get(t, nc, "a", kvs.Prefix)
 	if v != "" {
 		t.Fatalf("unexpected value from kvserver: %v", err)
 	}
@@ -99,21 +138,21 @@ func TestValuesPresistRestart(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	put(t, nc, "a", "aaa")
-	put(t, nc, "b", "bbb")
-	put(t, nc, "ab", "abab")
+	put(t, nc, "a", "aaa", kvs.Prefix)
+	put(t, nc, "b", "bbb", kvs.Prefix)
+	put(t, nc, "ab", "abab", kvs.Prefix)
 
-	v := get(t, nc, "a")
+	v := get(t, nc, "a", kvs.Prefix)
 	if v != "aaa" {
 		t.Fatalf("returned key %s doesn't match expected 'aaa'", v)
 	}
 
-	v = get(t, nc, "b")
+	v = get(t, nc, "b", kvs.Prefix)
 	if v != "bbb" {
 		t.Fatalf("returned key %s doesn't match expected 'bbb'", v)
 	}
 
-	v = get(t, nc, "ab")
+	v = get(t, nc, "ab", kvs.Prefix)
 	if v != "abab" {
 		t.Fatalf("returned key %s doesn't match expected 'abab'", v)
 	}
@@ -129,17 +168,17 @@ func TestValuesPresistRestart(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	v = get(t, nc, "a")
+	v = get(t, nc, "a", kvs.Prefix)
 	if "aaa" != v {
 		t.Fatalf("failed to read expected value for a: %s", v)
 	}
 
-	v = get(t, nc, "b")
+	v = get(t, nc, "b", kvs.Prefix)
 	if "bbb" != v {
 		t.Fatalf("failed to read expected value for b: %s", v)
 	}
 
-	v = get(t, nc, "ab")
+	v = get(t, nc, "ab", kvs.Prefix)
 	if "abab" != v {
 		t.Fatalf("failed to read expected value for ab: %s", v)
 	}
@@ -159,9 +198,9 @@ func TestDoubleUpdate(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	put(t, nc, "a", "a")
-	put(t, nc, "a", "b")
-	v := get(t, nc, "a")
+	put(t, nc, "a", "a", kvs.Prefix)
+	put(t, nc, "a", "b", kvs.Prefix)
+	v := get(t, nc, "a", kvs.Prefix)
 	if v != "b" {
 		t.Fatal("value didn't match")
 	}
@@ -171,7 +210,10 @@ func TestDoubleUpdate(t *testing.T) {
 
 func TestPerf(t *testing.T) {
 	var err error
-	kvs := NewKvServer(nil)
+	opts := DefaultKvServerOptions()
+	opts.Prefix = "keystore"
+
+	kvs := NewKvServer(opts)
 	kvs.Start()
 
 	nc, err := nats.Connect(natsURL(kvs))
@@ -184,17 +226,17 @@ func TestPerf(t *testing.T) {
 	start := time.Now()
 	for i := 0; i < count; i++ {
 		v := nats.NewInbox()[7:]
-		put(t, nc, v, v)
+		put(t, nc, v, v, kvs.Prefix)
 		buf[i] = v
-		if i%100 == 0 {
-			nc.Flush()
-		}
+		//if i%10000 == 0 {
+		//	nc.Flush()
+		//}
 	}
 	nc.Flush()
 	fmt.Printf("Adding %d keys %s\n", count, time.Since(start).String())
 
 	start = time.Now()
-	get(t, nc, "a")
+	get(t, nc, "a", kvs.Prefix)
 	fmt.Printf("Time to store %d keys %s\n", count, time.Since(start).String())
 	nc.Flush()
 	start = time.Now()
@@ -203,7 +245,7 @@ func TestPerf(t *testing.T) {
 	// wait until we can get back the last item
 	go func() {
 		for {
-			tt := get(t, nc, buf[count-1])
+			tt := get(t, nc, buf[count-1], kvs.Prefix)
 			if tt == buf[count-1] {
 				c <- "done"
 				break
@@ -241,7 +283,7 @@ func TestPerf(t *testing.T) {
 			for i := start; i < end; i++ {
 				start := time.Now()
 				m.requests.Add(1)
-				vv := get(t, cc, buf[i])
+				vv := get(t, cc, buf[i], kvs.Prefix)
 				m.nanos.Add(time.Since(start).Nanoseconds())
 				if vv != buf[i] {
 					fmt.Printf("%s = %s\n", buf[i], vv)
