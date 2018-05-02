@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"github.com/nats-io/gnatsd/server"
 	"github.com/nats-io/go-nats"
+	"hash/crc32"
+	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
-	"net"
-	"strings"
-	"hash/crc32"
 )
 
 const DefaultPrefix = "keystore"
@@ -118,11 +118,10 @@ func (s *KvServer) Stop() {
 		s.out[i] = nil
 	}
 
-
 	// save whatever we have
 	s.pending <- nil
 	// wait for accepted entries to be stored
-	<- s.done
+	<-s.done
 
 	s.kvs.Stop()
 
@@ -182,7 +181,7 @@ func (s *KvServer) startClient() {
 	}
 
 	if s.subject == "" {
-		s.nc.Subscribe(">", s.handler)
+		s.nc.Subscribe(">", s.greedyHandler)
 		fmt.Println("Listening for keystore requests on >", s.subject)
 
 	} else {
@@ -203,7 +202,7 @@ func (s *KvServer) processPending() {
 		if msg == nil {
 			fmt.Println("Number of requests processed by process: ", s.Metric.requests.Value())
 			close(s.pending)
-			s.done <-"done"
+			s.done <- "done"
 			return
 		}
 
@@ -211,7 +210,7 @@ func (s *KvServer) processPending() {
 		s.Metric.requests.Add(1)
 
 		key := []byte(msg.Subject)
-		if s.subject != "" {
+		if s.Prefix != "" {
 			key = key[len(s.Prefix):]
 		}
 
@@ -220,7 +219,6 @@ func (s *KvServer) processPending() {
 		s.Metric.valueBytes.Add(int64(dataLen))
 
 		var err error
-		var op= ""
 		if dataLen > 0 {
 			err = s.kvs.Put(key, msg.Data)
 		} else {
@@ -239,17 +237,21 @@ func (s *KvServer) processPending() {
 			}
 		}
 		if err != nil {
-			fmt.Printf("error %s: %v", op, err)
+			fmt.Printf("error: %v", err)
 		}
 
 		s.Metric.nanos.Add(time.Since(start).Nanoseconds())
 	}
 }
 
-func (s *KvServer) handler(msg *nats.Msg) {
+func (s *KvServer) greedyHandler(msg *nats.Msg) {
 	// ignore _INBOX messages
 	if strings.HasPrefix(msg.Subject, "_INBOX.") {
 		return
 	}
+	s.pending <- msg
+}
+
+func (s *KvServer) handler(msg *nats.Msg) {
 	s.pending <- msg
 }

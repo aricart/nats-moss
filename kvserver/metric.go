@@ -2,8 +2,8 @@ package kvserver
 
 import (
 	"expvar"
-	"time"
 	"fmt"
+	"time"
 )
 
 type Metric struct {
@@ -23,7 +23,7 @@ func (m *Metric) Dump() string {
 }
 
 func (m *Metric) init(name string) {
-	if ! m.reset(name) {
+	if !m.reset(name) {
 		m.nanos = expvar.NewInt(fmt.Sprintf("%sTimeNanos", name))
 		m.requests = expvar.NewInt(fmt.Sprintf("%sRequests", name))
 		m.keyBytes = expvar.NewInt(fmt.Sprintf("%sKeyBytes", name))

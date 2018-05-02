@@ -61,5 +61,5 @@ malaga:~ [1634]%
 
 ## Notes
 
-Lookup performance is about 40k lookups/sec
+Lookup performance is about 40k lookups/sec using sync requests. Async requests over 10x+ performance.
 

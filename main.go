@@ -1,12 +1,12 @@
 package main
 
 import (
-	"flag"
-	"github.com/aricart/nks/kvserver"
-	"runtime"
 	_ "expvar"
+	"flag"
 	"fmt"
+	"github.com/aricart/nks/kvserver"
 	"net/http"
+	"runtime"
 )
 
 var srv *kvserver.KvServerOptions
@@ -25,7 +25,6 @@ func main() {
 		http.ListenAndServe(fmt.Sprintf(":%d", opts.MonPort), http.DefaultServeMux)
 	}()
 	fmt.Printf("Monitoring http://localhost:%d/debug/vars\n", opts.MonPort)
-
 
 	server := kvserver.NewKvServer(opts)
 	server.Start()

@@ -1,10 +1,10 @@
 package kvserver
 
 import (
-	"github.com/couchbase/moss"
 	"fmt"
-	"time"
+	"github.com/couchbase/moss"
 	"io/ioutil"
+	"time"
 )
 
 type Kvs struct {
@@ -18,7 +18,6 @@ type Kvs struct {
 	Metrics
 }
 
-
 func NewKvs(dataDir string) *Kvs {
 	if dataDir == "" {
 		var err error
@@ -27,7 +26,7 @@ func NewKvs(dataDir string) *Kvs {
 			panic(err)
 		}
 	}
-	kvs := &Kvs{dataDir: dataDir,}
+	kvs := &Kvs{dataDir: dataDir}
 
 	kvs.get.init("get")
 	kvs.put.init("put")
